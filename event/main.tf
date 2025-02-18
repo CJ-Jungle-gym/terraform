@@ -499,6 +499,13 @@ resource "aws_elasticache_replication_group" "redis" {
   subnet_group_name          = aws_elasticache_subnet_group.redis_subnet_group.name 
   security_group_ids         = [aws_security_group.sg_redis.id]
 
+  # 이미 생성된 리소스가 있으면 중복 생성하지 않도록 lifecycle 설정
+  lifecycle {
+    prevent_destroy = true
+  }
+
+
+
   tags = {
     Name = "Event-Redis-Replication-Group"
   }
