@@ -254,11 +254,6 @@ resource "aws_route_table" "private_rt_a" {
     nat_gateway_id = aws_nat_gateway.event_nat_a.id
   }
 
-  # S3 트래픽은 VPC Endpoint를 통해 처리
-  route {
-    cidr_block = "0.0.0.0/0"
-  }
-
   tags = {
     Name = "Event-Private-Route-Table-A"
   }
@@ -274,13 +269,9 @@ resource "aws_route_table" "private_rt_c" {
     nat_gateway_id = aws_nat_gateway.event_nat_c.id
   }
 
-  # S3 트래픽은 VPC Endpoint를 통해 처리
-  route {
-    cidr_block = "0.0.0.0/0"
-  }
-
   tags = {
     Name = "Event-Private-Route-Table-C"
+
   }
 
 }
@@ -482,7 +473,7 @@ resource "aws_ecs_task_definition" "event_task" {
         { name = "DB_HOST", value = aws_db_instance.event_rds.address },
         { name = "DB_PORT", value = "3306" },
         { name = "DB_USER", value = "root" }, 
-        { name = "DB_PASSWORD", value = "root" } 
+        { name = "DB_PASSWORD", value = "Wjdrmfwla123!" } 
       ] 
   #    secrets = [ 
   #      { name = "DB_USER", valueFrom = "${aws_secretsmanager_secret.rds_secret.arn}:username::" },
@@ -517,7 +508,7 @@ resource "aws_ecs_service" "event_service" {
 
   load_balancer {
     target_group_arn = aws_lb_target_group.event_tg.arn
-    container_name   = "event-app"
+    container_name   = "terraform-event-app"
     container_port   = 80
   }
 
@@ -604,7 +595,7 @@ resource "aws_security_group" "sg_redis" {
     from_port       = 6379
     to_port         = 6379
     protocol        = "tcp"
-    security_groups = []  
+    security_groups = [aws_security_group.sg_ecs.id]  
   }
 
   egress {
@@ -631,7 +622,7 @@ resource "aws_elasticache_subnet_group" "redis_subnet_group" {
 
 # Redis ElastiCache Cluster
 resource "aws_elasticache_replication_group" "redis" {
-  replication_group_id       = "event-redis-cluster"
+  replication_group_id       = "terraform-event-redis-cluster"
   description                = "Redis replication group for event system"  
   engine                     = "redis"
   node_type                  = "cache.t3.micro"
@@ -674,7 +665,7 @@ resource "aws_db_instance" "event_rds" {
   multi_az           = true 
   
   username = "root" 
-  password = "root"  
+  password = "Wjdrmfwla123!"  
 
   #AWS secrets manager에서 이름과 패스워드 참조해서 사용됨
 #  username = jsondecode(aws_secretsmanager_secret_version.rds_secret_version.secret_string)["username"]
