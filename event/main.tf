@@ -21,10 +21,11 @@ resource "aws_vpc" "junglegym_event_vpc" {
   enable_dns_hostnames = true
 
   tags = {
-    Name = "junglegym-event-vpc"
+    Name = "terraform-junglegym-event-vpc"
     Environment = "event"
   }
 }
+
 
 # ap-northeast-2a
 # public subnet (ap-northeast-2a)
@@ -146,6 +147,77 @@ resource "aws_internet_gateway" "event_igw" {
   }
 }
 
+# VPC Endpoint(VPC gateway) for S3 (ECR이 S3를 사용하므로 추가 필요)
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id       = aws_vpc.junglegym_event_vpc.id
+  service_name = "com.amazonaws.ap-northeast-2.s3"
+  vpc_endpoint_type = "Gateway"
+
+  tags = {
+    Name = "terraform-Event-S3-Endpoint"
+  }
+
+   # `depends_on`을 통해 라우팅 테이블이 먼저 생성되도록 보장
+  depends_on = [
+    aws_route_table.private_rt_a,
+    aws_route_table.private_rt_c
+  ]
+}
+
+
+# VPC Endpoint(VPC Gateway) for ECR API
+resource "aws_vpc_endpoint" "ecr_api" {
+  vpc_id            = aws_vpc.junglegym_event_vpc.id
+  service_name      = "com.amazonaws.ap-northeast-2.ecr.api"
+  vpc_endpoint_type = "Interface"
+  subnet_ids        = [aws_subnet.private_a_1.id, aws_subnet.private_c_1.id]
+  security_group_ids = [aws_security_group.sg_vpc_endpoint.id]
+
+  tags = {
+    Name = "terraform-Event-ECR-API-Endpoint"
+   #해당 부분이 가용영역 내에 ecs와 redis가 vpc gateway 를 통해 인터넷 없이도  >연결됨
+  }
+}
+
+# VPC Endpoint(VPC gateway) for ECR Docker (이미지 다운로드를 위한 연결)
+resource "aws_vpc_endpoint" "ecr_dkr" {
+  vpc_id            = aws_vpc.junglegym_event_vpc.id
+  service_name      = "com.amazonaws.ap-northeast-2.ecr.dkr"
+  vpc_endpoint_type = "Interface"
+  subnet_ids        = [aws_subnet.private_a_1.id, aws_subnet.private_c_1.id]
+  security_group_ids = [aws_security_group.sg_vpc_endpoint.id]
+
+  tags = {
+    Name = "terraform-Event-ECR-docker-Endpoint"
+  }
+}
+
+
+
+# VPC Endpoint for security group
+resource "aws_security_group" "sg_vpc_endpoint" {
+  vpc_id = aws_vpc.junglegym_event_vpc.id
+
+  ingress {
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    security_groups = [aws_security_group.sg_ecs.id] # ECS에서 접근 허용
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "terraform-Event-VPC-Endpoint-SG"
+  }
+}
+
+
 # Routing Table and Public subnet  ( 라우팅 테이블과 퍼블릭 서브넷 연결)
 
 resource "aws_route_table" "public_rt" {
@@ -182,9 +254,15 @@ resource "aws_route_table" "private_rt_a" {
     nat_gateway_id = aws_nat_gateway.event_nat_a.id
   }
 
+  # S3 트래픽은 VPC Endpoint를 통해 처리
+  route {
+    cidr_block = "0.0.0.0/0"
+  }
+
   tags = {
     Name = "Event-Private-Route-Table-A"
   }
+  
 }
 
 # Private Route Table for Subnet C
@@ -196,10 +274,18 @@ resource "aws_route_table" "private_rt_c" {
     nat_gateway_id = aws_nat_gateway.event_nat_c.id
   }
 
+  # S3 트래픽은 VPC Endpoint를 통해 처리
+  route {
+    cidr_block = "0.0.0.0/0"
+  }
+
   tags = {
     Name = "Event-Private-Route-Table-C"
   }
+
 }
+
+
 
 # Private Subnet A1과 Private Subnet A2에 적용 (AZ A)
 resource "aws_route_table_association" "private_a_1" {
@@ -251,21 +337,21 @@ resource "aws_security_group" "sg_alb" {
   }
 
   tags = {
-    Name = "Event-vpc-alb-sg"
+    Name = "terraform-event-vpc-alb-sg"
   }
 }
 
 
 # ALB - Application Load Balancer
 resource "aws_lb" "event_alb" {
-  name               = "event-alb"
+  name               = "terraform-event-alb"
   internal           = false  
   load_balancer_type = "application"
   security_groups    = [aws_security_group.sg_alb.id]  
   subnets           = [aws_subnet.public_a.id, aws_subnet.public_c.id]  
 
   tags = {
-    Name = "Event-ALB"
+    Name = "terraform-event-ALB"
   }
 }
 
@@ -286,7 +372,7 @@ resource "aws_lb_target_group" "event_tg" {
   }
 
   tags = {
-    Name = "Event-alb-target-group"
+    Name = "terraform-event-alb-target-group"
   }
 }
 
@@ -302,7 +388,7 @@ resource "aws_lb_listener" "event_listener" {
   }
 }
 
-# ECS 
+# IAM 
 
 # 기존 IAM Role을 가져오기 (새로 생성하지 않음)
 data "aws_iam_role" "ecs_task_execution_role" {
@@ -323,13 +409,50 @@ resource "aws_iam_policy_attachment" "ecs_task_execution_role_ecr_policy" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
 
+# 추가적으로 S3 접근 권한 부여
+resource "aws_iam_policy" "ecs_task_s3_policy" {
+  name        = "ecs-task-s3-policy"
+  description = "Allow ECS Task to access S3 for ECR"
 
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:ListBucket"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# ECS Task Role에 S3 접근 정책 연결
+resource "aws_iam_policy_attachment" "ecs_task_execution_role_s3_policy" {
+  name       = "ecs-task-execution-role-s3-policy"
+  roles      = [data.aws_iam_role.ecs_task_execution_role.name]
+  policy_arn = aws_iam_policy.ecs_task_s3_policy.arn
+}
+
+
+
+
+
+
+
+
+
+
+
+# ECS
 # ECS cluster
 resource "aws_ecs_cluster" "event_cluster" {
-  name = "event-cluster"
+  name = "terraform-event-ecs-cluster"
 
   tags = {
-    Name = "Event-ECS-Cluster"
+    Name = "terraform-event-ecs-Cluster"
   }
 }
 
@@ -346,7 +469,7 @@ resource "aws_ecs_task_definition" "event_task" {
 
   container_definitions = jsonencode([
     {
-      name      = "event-app"
+      name      = "terraform-event-app"
       image     = "605134473022.dkr.ecr.ap-northeast-2.amazonaws.com/junglegym-test/nginx"
       essential = true
       portMappings = [
@@ -355,6 +478,16 @@ resource "aws_ecs_task_definition" "event_task" {
           hostPort      = 80
         }
       ]
+      environment = [
+        { name = "DB_HOST", value = aws_db_instance.event_rds.address },
+        { name = "DB_PORT", value = "3306" },
+        { name = "DB_USER", value = "root" }, 
+        { name = "DB_PASSWORD", value = "root" } 
+      ] 
+  #    secrets = [ 
+  #      { name = "DB_USER", valueFrom = "${aws_secretsmanager_secret.rds_secret.arn}:username::" },
+  #      { name = "DB_PASSWORD", valueFrom = "${aws_secretsmanager_secret.rds_secret.arn}:password::" }
+  #    ]
     }
   ])
 
@@ -365,13 +498,13 @@ resource "aws_ecs_task_definition" "event_task" {
 
 
   tags = {
-    Name = "Event-Task-Definition"
+    Name = "terraform-event-task-definition"
   }
 }
 
 # ECS task definition & service 
 resource "aws_ecs_service" "event_service" {
-  name            = "event-service"
+  name            = "terraform-event-service"
   cluster         = aws_ecs_cluster.event_cluster.id
   task_definition = aws_ecs_task_definition.event_task.arn
   desired_count   = 2  # ECS 인스턴스 개수
@@ -395,7 +528,7 @@ resource "aws_ecs_service" "event_service" {
   force_new_deployment = false    
 
   tags = {
-    Name = "Event-ECS-Service"
+    Name = "terraform-event-ecs-service"
   }
 }
 
@@ -413,6 +546,15 @@ resource "aws_security_group" "sg_ecs" {
   }
 
   egress {
+  # redis로 나가는 트래픽  포트 허용 
+    from_port       = 6379
+    to_port         = 6379
+    protocol        = "tcp"
+    security_groups = []
+  }
+
+
+  egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -420,7 +562,7 @@ resource "aws_security_group" "sg_ecs" {
   }
 
   tags = {
-    Name = "Event-vpc-ecs-sg"
+    Name = "terraform-event-vpc-ecs-sg"
   }
 }
 
@@ -446,7 +588,7 @@ resource "aws_security_group" "sg_nat" {
   }
 
   tags = {
-    Name = "Event-vpc-nat-sg"
+    Name = "terraform-event-vpc-nat-sg"
   }
 }
 
@@ -456,12 +598,13 @@ resource "aws_security_group" "sg_nat" {
 # Redis security group
 resource "aws_security_group" "sg_redis" {
   vpc_id = aws_vpc.junglegym_event_vpc.id
-
+  
+  # ECS 에서 Redis로 들어오는 요청 허용
   ingress {
     from_port       = 6379
     to_port         = 6379
     protocol        = "tcp"
-    security_groups = [aws_security_group.sg_ecs.id]  
+    security_groups = []  
   }
 
   egress {
@@ -472,17 +615,17 @@ resource "aws_security_group" "sg_redis" {
   }
 
   tags = {
-    Name = "Event-vpc-redis-sg"
+    Name = "terraform-event-vpc-redis-sg"
   }
 }
 
 # Redis subnet group (DB subnet)
 resource "aws_elasticache_subnet_group" "redis_subnet_group" {
-  name       = "event-redis-subnet-group"
+  name       = "terraform-event-redis-subnet-group"
   subnet_ids = [aws_subnet.private_a_2.id, aws_subnet.private_c_2.id] 
 
   tags = {
-    Name = "Event-Redis-Subnet-Group"
+    Name = "terraform-event-redis-subnet-group"
   }
 }
 
@@ -504,10 +647,81 @@ resource "aws_elasticache_replication_group" "redis" {
     prevent_destroy = true
   }
 
-
-
   tags = {
     Name = "Event-Redis-Replication-Group"
   }
 }
+
+
+
+
+
+# DB - RDS   2/19에 반영한 것
+# 25/2/19해당 부분 시크릿 매니저 db 유저네임과 패스워드 참조하도록 설정해야함
+
+
+# create db(rds) instance
+resource "aws_db_instance" "event_rds" {
+  identifier           = "event-db"
+  engine              = "mysql"
+  engine_version      = "8.0"
+  instance_class      = "db.t3.micro"
+  allocated_storage   = 20
+  storage_type        = "gp2"
+  db_subnet_group_name = aws_db_subnet_group.event_db_subnet_group.name
+  publicly_accessible = false
+  vpc_security_group_ids = [aws_security_group.sg_db.id]
+  multi_az           = true 
+  
+  username = "root" 
+  password = "root"  
+
+  #AWS secrets manager에서 이름과 패스워드 참조해서 사용됨
+#  username = jsondecode(aws_secretsmanager_secret_version.rds_secret_version.secret_string)["username"]
+#  password = jsondecode(aws_secretsmanager_secret_version.rds_secret_version.secret_string)["password"]  
+ 
+  tags = {
+    Name = "terraform-event-RDS"
+  }
+}
+
+
+
+# db(RDS) subnet_group 
+resource "aws_db_subnet_group" "event_db_subnet_group" {
+  name       = "terraform-event-db-subnet-group"
+  subnet_ids = [aws_subnet.private_a_2.id, aws_subnet.private_c_2.id] 
+
+  tags = {
+    Name = "terraform-event-db-rds-subnet-group"
+  }
+}
+
+
+# RDS 보안 그룹 (MySQL 접속을 허용)
+resource "aws_security_group" "sg_db" {
+  vpc_id = aws_vpc.junglegym_event_vpc.id
+
+  # ECS에서 RDS로 접근 허용 (MySQL 3306 포트)
+  ingress {
+    from_port       = 3306
+    to_port         = 3306
+    protocol        = "tcp"
+    security_groups = [aws_security_group.sg_ecs.id] 
+  }
+
+  # 아웃바운드 트래픽 허용 (필요에 따라 조정 가능)
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "terraform-event-db-rds-security-group"
+  }
+}
+
+
 
