@@ -427,6 +427,58 @@ resource "aws_iam_policy_attachment" "ecs_task_execution_role_s3_policy" {
   policy_arn = aws_iam_policy.ecs_task_s3_policy.arn
 }
 
+#  RDS 또는 애플리케이션에서 Secrets Manager(ASM)에서 암호를 가져올 수 있도록 IAM 정책을 적용
+
+resource "aws_iam_policy" "secrets_policy" {
+  name        = "AllowRDSSecretsAccess"
+  description = "Allows RDS to access Secrets Manager and decrypt with KMS"
+  
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ]
+        Resource = aws_secretsmanager_secret.rds_secret.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt"
+        ]
+        Resource = aws_kms_key.event_rds_kms.arn
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role" "rds_secrets_role" {
+  name = "rds-secrets-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "rds.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "attach_secrets_policy" {
+  policy_arn = aws_iam_policy.secrets_policy.arn
+  role       = aws_iam_role.rds_secrets_role.name
+}
+
+
+
 
 
 
@@ -469,12 +521,15 @@ resource "aws_ecs_task_definition" "event_task" {
           hostPort      = 80
         }
       ]
-      environment = [
+      
+        environment = [
         { name = "DB_HOST", value = aws_db_instance.event_rds.address },
-        { name = "DB_PORT", value = "3306" },
-        { name = "DB_USER", value = "root" }, 
-        { name = "DB_PASSWORD", value = "Wjdrmfwla123!" } 
-      ] 
+        { name = "DB_PORT", value = "5432" }
+      ],
+      secrets = [
+        { name = "DB_USER", valueFrom = "${aws_secretsmanager_secret.rds_secret.arn}:username::" }, 
+        { name = "DB_PASSWORD", valueFrom = "${aws_secretsmanager_secret.rds_secret.arn}:password::" } 
+      ]
   #    secrets = [ 
   #      { name = "DB_USER", valueFrom = "${aws_secretsmanager_secret.rds_secret.arn}:username::" },
   #      { name = "DB_PASSWORD", valueFrom = "${aws_secretsmanager_secret.rds_secret.arn}:password::" }
@@ -491,9 +546,12 @@ resource "aws_ecs_task_definition" "event_task" {
   tags = {
     Name = "terraform-event-task-definition"
   }
+  
+   # ✅ ECS 실행 전 RDS & ASM이 완료되도록 설정
+  depends_on = [aws_db_instance.event_rds, aws_secretsmanager_secret_version.rds_secret_version]
 }
 
-# ECS task definition & service 
+# ECS service 
 resource "aws_ecs_service" "event_service" {
   name            = "terraform-event-service"
   cluster         = aws_ecs_cluster.event_cluster.id
@@ -516,7 +574,7 @@ resource "aws_ecs_service" "event_service" {
     type = "ECS"
   }
 
-  force_new_deployment = false    
+  force_new_deployment = true    
 
   tags = {
     Name = "terraform-event-ecs-service"
@@ -541,8 +599,16 @@ resource "aws_security_group" "sg_ecs" {
     from_port       = 6379
     to_port         = 6379
     protocol        = "tcp"
-    security_groups = []
+    security_groups = [aws_security_group.sg_redis.id]
   }
+
+  egress {
+    # RDS(PostgreSQL)로 나가는 트래픽 5432 포트 허용
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    cidr_blocks = ["10.1.0.0/16"]  
+  }  
 
 
   egress {
@@ -584,93 +650,65 @@ resource "aws_security_group" "sg_nat" {
 }
 
 
+# rds.tf
+# DB - RDS   2/20에 반영한 것
+# 25/2/20 해당 부분 시크릿 매니저 db 유저네임과 패스워드 참조하도록 설정해야함
 
-# Redis
-# Redis security group
-resource "aws_security_group" "sg_redis" {
+# RDS Subnet Group
+resource "aws_db_subnet_group" "event_db_subnet_group" {
+  name       = "terraform-event-db-subnet-group"
+  subnet_ids = [aws_subnet.private_a_2.id, aws_subnet.private_c_2.id]
+
+  tags = {
+    Name = "terraform-event-db-rds-subnet-group"
+  }
+}
+
+# RDS Security Group
+resource "aws_security_group" "sg_db" {
   vpc_id = aws_vpc.junglegym_event_vpc.id
-  
-  # ECS 에서 Redis로 들어오는 요청 허용
+
+  # ECS에서 RDS로 접근 허용 (PostgreSQL 5432포트)
   ingress {
-    from_port       = 6379
-    to_port         = 6379
+    from_port       = 5432
+    to_port         = 5432
     protocol        = "tcp"
-    security_groups = [aws_security_group.sg_ecs.id]  
+    security_groups = ["10.1.0.0/16"]
   }
 
+  # VPC 내부 트래픽만 허용 (보안 강화)
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["10.1.0.0/16"]
   }
 
   tags = {
-    Name = "terraform-event-vpc-redis-sg"
+    Name = "terraform-event-db-rds-security-group"
   }
 }
 
-# Redis subnet group (DB subnet)
-resource "aws_elasticache_subnet_group" "redis_subnet_group" {
-  name       = "terraform-event-redis-subnet-group"
-  subnet_ids = [aws_subnet.private_a_2.id, aws_subnet.private_c_2.id] 
-
-  tags = {
-    Name = "terraform-event-redis-subnet-group"
-  }
-}
-
-# Redis ElastiCache Cluster
-resource "aws_elasticache_replication_group" "redis" {
-  replication_group_id       = "terraform-event-redis-cluster"
-  description                = "Redis replication group for event system"  
-  engine                     = "redis"
-  node_type                  = "cache.t3.micro"
-  num_node_groups            = 1  
-  replicas_per_node_group    = 1  
-  automatic_failover_enabled = true  
-  parameter_group_name       = "default.redis7"
-  subnet_group_name          = aws_elasticache_subnet_group.redis_subnet_group.name 
-  security_group_ids         = [aws_security_group.sg_redis.id]
-
-  # 이미 생성된 리소스가 있으면 중복 생성하지 않도록 lifecycle 설정
-  lifecycle {
-    prevent_destroy = true
-  }
-
-  tags = {
-    Name = "Event-Redis-Replication-Group"
-  }
-}
-
-
-
-
-
-# DB - RDS   2/19에 반영한 것
-# 25/2/19해당 부분 시크릿 매니저 db 유저네임과 패스워드 참조하도록 설정해야함
-
-
-# create db(rds) instance
+# RDS Multi-AZ Instance
 resource "aws_db_instance" "event_rds" {
-  identifier           = "event-db"
-  engine              = "mysql"
-  engine_version      = "8.0"
-  instance_class      = "db.t3.micro"
+  identifier          = "event-postgres-db"
+  engine              = "postgres"
+  engine_version      = "16.3-R3"
+  instance_class      = "db.t3.small"
   allocated_storage   = 20
   storage_type        = "gp2"
   db_subnet_group_name = aws_db_subnet_group.event_db_subnet_group.name
   publicly_accessible = false
   vpc_security_group_ids = [aws_security_group.sg_db.id]
-  multi_az           = true 
-  
-  username = "root" 
-  password = "Wjdrmfwla123!"  
+  multi_az           = true
 
-  #AWS secrets manager에서 이름과 패스워드 참조해서 사용됨
+  # Secrets Manager에서 DB 사용자 인증
 #  username = jsondecode(aws_secretsmanager_secret_version.rds_secret_version.secret_string)["username"]
-#  password = jsondecode(aws_secretsmanager_secret_version.rds_secret_version.secret_string)["password"]  
- 
+#  password = jsondecode(aws_secretsmanager_secret_version.rds_secret_version.secret_string)["password"]
+
+  username = "root"
+  password = "root"
+
   tags = {
     Name = "terraform-event-RDS"
   }
@@ -678,27 +716,95 @@ resource "aws_db_instance" "event_rds" {
 
 
 
-# db(RDS) subnet_group 
-resource "aws_db_subnet_group" "event_db_subnet_group" {
-  name       = "terraform-event-db-subnet-group"
-  subnet_ids = [aws_subnet.private_a_2.id, aws_subnet.private_c_2.id] 
 
-  tags = {
-    Name = "terraform-event-db-rds-subnet-group"
-  }
+#  event-rds가 생성된 후 ASM 생성 (종속성 적용)
+resource "aws_secretsmanager_secret" "rds_secret" {
+  name       = "event-rds-postgre"
+  description = "event vpc postgre RDS 자격증명 저장"
+  kms_key_id = aws_kms_key.event_rds_kms.arn
+
+  #  `event-rds` 생성 후 실행하도록 종속성 적용
+
+  depends_on = [aws_db_instance.event_rds]
+}
+
+resource "aws_secretsmanager_secret_version" "rds_secret_version" {
+  secret_id     = aws_secretsmanager_secret.rds_secret.id
+  secret_string = jsonencode({
+    username = "root"
+    password = "root"
+  })
+
+   # ✅ RDS 생성 이후 실행
+  depends_on = [aws_db_instance.event_rds]
 }
 
 
-# RDS 보안 그룹 (MySQL 접속을 허용)
-resource "aws_security_group" "sg_db" {
+# KMS 설정
+resource "aws_kms_key" "event_rds_kms" {
+  description             = "Rds Postgresql Key 최종"
+  enable_key_rotation     = true
+  deletion_window_in_days = 7
+
+  tags = {
+    Name = "event-rds-postgresql-kms"
+  }
+}
+
+resource "aws_kms_alias" "event_rds_kms_alias" {
+  name          = "alias/Event-Rds-Postgre-Key"
+  target_key_id = aws_kms_key.event_rds_kms.id
+}
+
+
+
+
+
+
+
+
+
+
+
+
+# redis.tf
+# redis subnet group
+resource "aws_elasticache_subnet_group" "event_redis_subnet_group" {
+  name       = "event-redis-subnet-group"
+  subnet_ids = [aws_subnet.private_a_2.id, aws_subnet.private_c_2.id]
+
+  tags = {
+    Name = "terraform-event-redis-subnet-group"
+  }
+}
+
+# Terraform Redis 설정 (멀티 AZ)
+resource "aws_elasticache_replication_group" "redis_cluster" {
+  replication_group_id       = "terraform-event-redis-cluster"
+  description                = "Multi-AZ Redis Cluster"
+  node_type                  = "cache.t3.micro"
+  num_cache_clusters         = 2
+  automatic_failover_enabled = true
+  multi_az_enabled           = true
+  subnet_group_name          = aws_elasticache_subnet_group.event_redis_subnet_group.name
+
+  security_group_ids         = [aws_security_group.sg_redis.id]
+
+  tags = {
+    Name = "terraform-event-redis-cluster"
+  }
+}
+
+# redis security group
+resource "aws_security_group" "sg_redis" {
   vpc_id = aws_vpc.junglegym_event_vpc.id
 
-  # ECS에서 RDS로 접근 허용 (MySQL 3306 포트)
+  # ECS에서 Redis로 접근 허용 (6379 포트)
   ingress {
-    from_port       = 3306
-    to_port         = 3306
+    from_port       = 6379
+    to_port         = 6379
     protocol        = "tcp"
-    security_groups = [aws_security_group.sg_ecs.id] 
+    cidr_blocks     = ["10.1.0.0/16"]
   }
 
   # 아웃바운드 트래픽 허용 (필요에 따라 조정 가능)
@@ -706,13 +812,19 @@ resource "aws_security_group" "sg_db" {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["10.1.0.0/16"]
   }
 
+
   tags = {
-    Name = "terraform-event-db-rds-security-group"
+    Name = "terraform-event-redis-security-group"
   }
 }
+
+
+
+
+
 
 
 
