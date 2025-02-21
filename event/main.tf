@@ -348,7 +348,7 @@ resource "aws_lb" "event_alb" {
 
 # ALB target group
 resource "aws_lb_target_group" "event_tg" {
-  name        = "event-tg"
+  name        = "terraform-event-tg"
   port        = 80
   protocol    = "HTTP"
   vpc_id      = aws_vpc.junglegym_event_vpc.id
@@ -361,7 +361,12 @@ resource "aws_lb_target_group" "event_tg" {
     healthy_threshold   = 2
     unhealthy_threshold = 2
   }
-
+  
+  # 🔥 **이미 존재하는 경우 변경을 무시 (ignore_changes)**
+  lifecycle {
+    ignore_changes = [name]
+  }
+ 
   tags = {
     Name = "terraform-event-alb-target-group"
   }
@@ -400,32 +405,6 @@ resource "aws_iam_policy_attachment" "ecs_task_execution_role_ecr_policy" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
 
-# 추가적으로 S3 접근 권한 부여
-resource "aws_iam_policy" "ecs_task_s3_policy" {
-  name        = "ecs-task-s3-policy"
-  description = "Allow ECS Task to access S3 for ECR"
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:GetObject",
-          "s3:ListBucket"
-        ]
-        Resource = "*"
-      }
-    ]
-  })
-}
-
-# ECS Task Role에 S3 접근 정책 연결
-resource "aws_iam_policy_attachment" "ecs_task_execution_role_s3_policy" {
-  name       = "ecs-task-execution-role-s3-policy"
-  roles      = [data.aws_iam_role.ecs_task_execution_role.name]
-  policy_arn = aws_iam_policy.ecs_task_s3_policy.arn
-}
 
 #  RDS 또는 애플리케이션에서 Secrets Manager(ASM)에서 암호를 가져올 수 있도록 IAM 정책을 적용
 
@@ -656,8 +635,13 @@ resource "aws_security_group" "sg_nat" {
 
 # RDS Subnet Group
 resource "aws_db_subnet_group" "event_db_subnet_group" {
-  name       = "terraform-event-db-subnet-group"
+  name       = "terraform-event-rds-postgre-subnet-group"
   subnet_ids = [aws_subnet.private_a_2.id, aws_subnet.private_c_2.id]
+  
+  # 🔥 **이미 존재하는 경우 변경을 무시 (ignore_changes)**
+  lifecycle {
+    ignore_changes = [name]
+  }
 
   tags = {
     Name = "terraform-event-db-rds-subnet-group"
@@ -673,7 +657,7 @@ resource "aws_security_group" "sg_db" {
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
-    security_groups = ["10.1.0.0/16"]
+    security_groups = [aws_security_group.sg_ecs.id]
   }
 
   # VPC 내부 트래픽만 허용 (보안 강화)
@@ -693,7 +677,7 @@ resource "aws_security_group" "sg_db" {
 resource "aws_db_instance" "event_rds" {
   identifier          = "event-postgres-db"
   engine              = "postgres"
-  engine_version      = "16.3-R3"
+  engine_version      = "15.7"
   instance_class      = "db.t3.small"
   allocated_storage   = 20
   storage_type        = "gp2"
@@ -707,7 +691,7 @@ resource "aws_db_instance" "event_rds" {
 #  password = jsondecode(aws_secretsmanager_secret_version.rds_secret_version.secret_string)["password"]
 
   username = "root"
-  password = "root"
+  password = "wjdrmfwla123"
 
   tags = {
     Name = "terraform-event-RDS"
@@ -732,7 +716,7 @@ resource "aws_secretsmanager_secret_version" "rds_secret_version" {
   secret_id     = aws_secretsmanager_secret.rds_secret.id
   secret_string = jsonencode({
     username = "root"
-    password = "root"
+    password = "wjdrmfwla123"
   })
 
    # ✅ RDS 생성 이후 실행
@@ -770,11 +754,16 @@ resource "aws_kms_alias" "event_rds_kms_alias" {
 # redis.tf
 # redis subnet group
 resource "aws_elasticache_subnet_group" "event_redis_subnet_group" {
-  name       = "event-redis-subnet-group"
+  name       = "terraform-event-redis-subnet-group"
   subnet_ids = [aws_subnet.private_a_2.id, aws_subnet.private_c_2.id]
 
   tags = {
     Name = "terraform-event-redis-subnet-group"
+  }
+  
+  # 🔥 **이미 존재하는 경우 변경을 무시 (ignore_changes)**
+  lifecycle {
+    ignore_changes = [name]
   }
 }
 
