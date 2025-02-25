@@ -17,7 +17,7 @@ data "aws_subnet" "default_subnet" {
 }
 
 # ✅ 보안 그룹 생성 (SSH 허용)
-resource "aws_security_group" "test_sg" {
+resource "aws_security_group" "hyuna-lambda-sg" {
   vpc_id = data.aws_vpc.existing_vpc.id
 
   ingress {
@@ -35,7 +35,7 @@ resource "aws_security_group" "test_sg" {
   }
 
   tags = {
-    Name = "Test-SG"
+    Name = "hyuna-lambda-sg"
   }
 }
 
@@ -44,7 +44,7 @@ resource "aws_instance" "hyuna_lambda_test" {
   ami             = "ami-0c55b159cbfafe1f0"  # Amazon Linux 2 AMI
   instance_type   = "t2.micro"
   subnet_id       = data.aws_subnet.default_subnet.id
-  security_groups = [aws_security_group.test_sg.name]
+  security_groups = [aws_security_group.hyuna-lambda-sg.name]
 
   tags = {
     Name = "hyuna_lambda_test"
