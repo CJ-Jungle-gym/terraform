@@ -60,9 +60,8 @@ data "aws_lb_target_group" "ecs_backend_target_group" {
 resource "aws_lb_listener" "backend_listener" {
   load_balancer_arn = data.aws_lb.ecs_alb_backend.arn
   port              = 443
-  protocol          = "HTTP"
+  protocol          = "HTTPS"
   certificate_arn   = "arn:aws:acm:ap-northeast-2:605134473022:certificate/e09cfc78-5279-445b-9eeb-c1e0f0290408"
-
 
   default_action {
     type             = "forward"
@@ -83,7 +82,7 @@ resource "aws_lb_listener" "backend_listener" {
 resource "aws_lb_listener" "frontend_listener" {
   load_balancer_arn = data.aws_lb.ecs_alb_frontend.arn
   port              = 443
-  protocol          = "HTTP"
+  protocol          = "HTTPS"
   certificate_arn   = "arn:aws:acm:ap-northeast-2:605134473022:certificate/e09cfc78-5279-445b-9eeb-c1e0f0290408"
 
   default_action {
