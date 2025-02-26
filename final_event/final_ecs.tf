@@ -105,7 +105,7 @@ resource "aws_lb_listener" "frontend_listener" {
 
 resource "aws_lb_listener_rule" "backend_rule" {
   listener_arn = aws_lb_listener.backend_listener.arn
-  priority     = 99999
+  priority     = 1000
 
   condition {
     path_pattern {
@@ -134,7 +134,7 @@ resource "aws_lb_listener_rule" "backend_rule" {
 
 resource "aws_lb_listener_rule" "frontend_rule" {
   listener_arn = aws_lb_listener.frontend_listener.arn
-  priority     = 99999
+  priority     = 2000
 
   condition {
     path_pattern {
