@@ -52,7 +52,7 @@ data "aws_lb_target_group" "ecs_frontend_target_group" {
 
 
 data "aws_lb_target_group" "ecs_backend_target_group" {
-  name = "ecs-jgbackend2"
+  name = "ecs-jgbackend3"
 }
 
 ########## Load Balancer Listener ##########
