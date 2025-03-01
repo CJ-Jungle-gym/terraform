@@ -20,11 +20,12 @@
 4. **apply 전 변경 사항 확인**
 
    terraform plan
-       - .tf 파일 기반으로 현재 aws 인프라 상태와 비교하여 변경사항 미리 확인
-5. **terraform 실행**
+
+   .tf 파일 기반으로 현재 aws 인프라 상태와 비교하여 변경사항 미리 확인
+6. **terraform 실행**
 
    terraform apply
-6. **생성된 리소스 AWS 콘솔에서 확인**
+7. **생성된 리소스 AWS 콘솔에서 확인**
 
 
 
