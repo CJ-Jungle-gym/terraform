@@ -16,8 +16,9 @@
 3. **Terraform 초기화**
    
    terraform init
-       - Terraform 프로젝트에서 실행하는 첫 번째 명령어, 수행할 작업 디렉토리를 Terraform 작업 공간으로 초기화하는 역할
-4. **apply 전 변경 사항 확인**
+
+   Terraform 프로젝트에서 실행하는 첫 번째 명령어, 수행할 작업 디렉토리를 Terraform 작업 공간으로 초기화하는 역할
+5. **apply 전 변경 사항 확인**
 
    terraform plan
 
