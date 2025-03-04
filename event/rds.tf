@@ -137,8 +137,8 @@ resource "aws_db_instance" "event_rds" {
 #  username = jsondecode(aws_secretsmanager_secret_version.rds_secret_version.secret_string)["username"]
 #  password = jsondecode(aws_secretsmanager_secret_version.rds_secret_version.secret_string)["password"]
 
-  username = "root"
-  password = "wjdrmfwla123"
+  username = ""
+  password = ""
 
   tags = {
     Name = "terraform-event-RDS"
@@ -166,8 +166,8 @@ resource "aws_secretsmanager_secret" "rds_secret" {
 resource "aws_secretsmanager_secret_version" "rds_secret_version" {
   secret_id     = aws_secretsmanager_secret.rds_secret.id
   secret_string = jsonencode({
-    username = "root"
-    password = "wjdrmfwla123"
+    username = ""
+    password = ""
   })
 
    # ✅ RDS 생성 이후 실행
